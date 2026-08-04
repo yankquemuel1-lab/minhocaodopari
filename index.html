@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Minhocão do Pari 3D — A Lenda</title>
+  <meta name="description" content="Dome o Minhocão do Pari e desça os rios de Mato Grosso — a lenda em 3D, direto no navegador.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐍</text></svg>">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <canvas id="game-canvas"></canvas>
+
+    <!-- Tela inicial / seleção de personagem -->
+    <div id="screen-menu" class="screen">
+      <div class="menu-inner">
+        <h1>MINHOCÃO DO PARI <span>3D</span></h1>
+        <p class="subtitle">A Lenda dos Rios de Mato Grosso</p>
+        <div class="name-row">
+          <label for="player-name">Seu nome:</label>
+          <input id="player-name" type="text" maxlength="20" placeholder="Digite seu nome" autocomplete="off">
+        </div>
+        <p class="pick-label">Escolha seu personagem</p>
+        <div class="char-row">
+          <button class="char-card" data-char="boy">
+            <img src="assets/img/player_boy_stand.png" alt="Caetano">
+            <strong>Caetano</strong>
+          </button>
+          <button class="char-card" data-char="girl">
+            <img src="assets/img/player_girl_stand.png" alt="Dandara">
+            <strong>Dandara</strong>
+          </button>
+        </div>
+        <p class="controls-hint">
+          WASD / Setas — andar &nbsp;•&nbsp; E — conversar &nbsp;•&nbsp; No rio: A/D ou ←/→ para desviar
+        </p>
+        <p id="menu-record" class="record"></p>
+      </div>
+    </div>
+
+    <!-- Caixa de diálogo -->
+    <div id="dialog-box" class="hidden">
+      <strong id="dialog-name">Seu Maneca</strong>
+      <p id="dialog-text"></p>
+      <span class="dialog-hint">ESPAÇO ou clique para continuar ▸</span>
+    </div>
+
+    <!-- Aviso de interação -->
+    <div id="interact-hint" class="hidden">Aperte <b>E</b> para falar com Seu Maneca</div>
+
+    <!-- Legenda de cutscene -->
+    <div id="cutscene-caption" class="hidden"></div>
+
+    <!-- HUD da corrida -->
+    <div id="hud" class="hidden">
+      <div id="hud-score">Pontos: 0</div>
+      <div id="hud-trecho">Rio Quilombo — Chapada</div>
+      <div id="hud-vidas"></div>
+    </div>
+    <div id="damage-flash"></div>
+    <div id="popup-layer"></div>
+
+    <!-- Game over -->
+    <div id="screen-gameover" class="screen hidden">
+      <div class="menu-inner">
+        <h1>O Minhocão mergulhou...</h1>
+        <p class="subtitle">Mas a lenda continua viva no rio.</p>
+        <p id="final-score" class="final-score"></p>
+        <p id="final-record" class="record"></p>
+        <div id="ranking-box">
+          <h2>🏆 Ranking dos Domadores</h2>
+          <ol id="ranking-list"><li class="ranking-status">Carregando ranking...</li></ol>
+        </div>
+        <div class="char-row">
+          <button id="btn-restart" class="btn-big">↻ Jogar de novo</button>
+          <button id="btn-menu" class="btn-small">Voltar ao menu</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="loading" class="hidden">Preparando o rio...</div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
