@@ -5,8 +5,10 @@ import { makeHumanoid, makeMinhocao } from './characters.js';
 import * as SC from './scenery.js';
 
 const CHUNK_LEN = 90;
-const AHEAD = 8;       // chunks à frente
-const RIVER_HALF = 24; // meia largura navegável
+const AHEAD = 8;         // chunks à frente
+const RIVER_HALF = 24;   // meia largura navegável
+const MIN_GATE_GAP = 110; // distância mínima entre dois portões — dá espaço de manobra
+const GATE_CLEAR = 16;    // raio (em z) ao redor do portão livre de obstáculos soltos
 
 const BIOMES = {
   chapada: {
@@ -56,8 +58,11 @@ export class RideWorld {
     // Leito distante nas laterais (base sob os cenários)
     this.sideBase = new THREE.Mesh(
       new THREE.PlaneGeometry(400, 700),
-      new THREE.MeshStandardMaterial({ color: 0x8a7455, roughness: 1 })
+      SC.texMat(0x8a7455, SC.tiledTexture(SC.terrainTexture(), 100, 175), { roughness: 1 })
     );
+    // Textura das margens por chunk — instância própria (repeat menor, criada
+    // uma única vez e reaproveitada em todo spawnChunk, nunca clonada por chunk).
+    this.bankTex = SC.tiledTexture(SC.terrainTexture(), 10, 20);
     this.sideBase.rotation.x = -Math.PI / 2;
     this.sideBase.position.y = -2.6;
     this.group.add(this.sideBase);
@@ -111,6 +116,7 @@ export class RideWorld {
 
     this.chunks = [];
     this.frontierZ = 60; // próximo chunk começa aqui e cresce para -z
+    this.lastGateZ = null; // controla o espaçamento mínimo entre portões
 
     for (let i = 0; i < AHEAD; i++) this.spawnChunk();
 
@@ -135,7 +141,7 @@ export class RideWorld {
     for (const side of [-1, 1]) {
       const bank = new THREE.Mesh(
         new THREE.PlaneGeometry(46, CHUNK_LEN),
-        new THREE.MeshStandardMaterial({ color: B.ground, roughness: 0.95 })
+        SC.texMat(B.ground, this.bankTex, { roughness: 0.95 })
       );
       bank.rotation.x = -Math.PI / 2;
       bank.position.set(side * (RIVER_HALF + 24), -0.1, z0 + CHUNK_LEN / 2);
@@ -228,36 +234,56 @@ export class RideWorld {
     // Obstáculos e coletáveis (só depois da largada)
     if (distHere > 40) {
       const lvl = this.level;
+      const kindsPool = biome === 'pantanal'
+        ? ['pedra', 'raiz', 'lixo', 'garrafa', 'piranha', 'jacare', 'jacare']
+        : ['pedra', 'raiz', 'lixo', 'garrafa', 'piranha'];
       const addObstacle = (x, z, mover) => {
-        const o = SC.makeObstacle(choice(['pedra', 'raiz', 'lixo', 'garrafa']));
+        const o = SC.makeObstacle(choice(kindsPool));
         o.position.set(x, 0, z);
         o.userData.phase = rand(0, 6);
-        // Obstáculos móveis a partir do nível 3
+        // Obstáculos móveis a partir do nível 2
         if (mover) o.userData.vx = choice([-1, 1]) * rand(2.5, 4 + lvl * 0.5);
         g.add(o);
         obstacles.push(o);
       };
 
-      // Obstáculos soltos — quantidade cresce com o nível
-      const nObs = Math.min(9, 3 + Math.floor(lvl * 1.1));
-      for (let i = 0; i < nObs; i++) {
-        const mover = lvl >= 3 && Math.random() < 0.3;
-        addObstacle(rand(-RIVER_HALF + 3, RIVER_HALF - 3), z0 + rand(4, CHUNK_LEN - 4), mover);
+      // "Portão" decidido ANTES dos obstáculos soltos — reserva uma faixa livre
+      // ao redor dele, senão obstáculos soltos podem cercar a brecha por todo
+      // lado e tornar a passagem impossível (sem espaço pra se alinhar a tempo).
+      let gate = null;
+      const gateZCandidate = z0 + rand(18, CHUNK_LEN - 18);
+      const farFromLastGate = this.lastGateZ === null || (this.lastGateZ - gateZCandidate) >= MIN_GATE_GAP;
+      if (lvl >= 2 && farFromLastGate && Math.random() < Math.min(0.8, 0.25 + lvl * 0.1)) {
+        gate = {
+          z: gateZCandidate,
+          gapX: rand(-RIVER_HALF + 6, RIVER_HALF - 6),
+          gapW: Math.max(8, 13 - lvl * 0.7) // brecha encolhe com o nível, mais devagar que antes
+        };
+        this.lastGateZ = gateZCandidate;
       }
 
-      // "Portão": fileira atravessando o rio com uma única brecha — força manobra
-      if (lvl >= 2 && Math.random() < Math.min(0.85, 0.3 + lvl * 0.12)) {
-        const gateZ = z0 + rand(18, CHUNK_LEN - 18);
-        const gapX = rand(-RIVER_HALF + 6, RIVER_HALF - 6);
-        const gapW = Math.max(7, 13 - lvl); // brecha encolhe com o nível
+      // Obstáculos soltos — quantidade cresce com o nível, evitando a faixa do portão
+      const nObs = Math.min(8, 3 + Math.floor(lvl * 0.9));
+      let placed = 0, tries = 0;
+      while (placed < nObs && tries < nObs * 4) {
+        tries++;
+        const z = z0 + rand(4, CHUNK_LEN - 4);
+        if (gate && Math.abs(z - gate.z) < GATE_CLEAR) continue;
+        const mover = lvl >= 2 && Math.random() < 0.3;
+        addObstacle(rand(-RIVER_HALF + 3, RIVER_HALF - 3), z, mover);
+        placed++;
+      }
+
+      // Fileira do portão em si, com a brecha reservada
+      if (gate) {
         for (let x = -RIVER_HALF + 3; x <= RIVER_HALF - 3; x += 4.6) {
-          if (Math.abs(x - gapX) > gapW / 2) {
-            addObstacle(x + rand(-0.8, 0.8), gateZ + rand(-2, 2), false);
+          if (Math.abs(x - gate.gapX) > gate.gapW / 2) {
+            addObstacle(x + rand(-0.8, 0.8), gate.z + rand(-2, 2), false);
           }
         }
         // Recompensa na brecha: atravessar bem dá pontos
         const prize = SC.makeCollectible(Math.random() < 0.3 ? 'estrela' : 'gota');
-        prize.position.set(gapX, 1.6, gateZ);
+        prize.position.set(gate.gapX, 1.6, gate.z);
         prize.userData.phase = rand(0, 6);
         g.add(prize);
         items.push(prize);

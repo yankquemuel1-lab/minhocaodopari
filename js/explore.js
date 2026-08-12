@@ -32,9 +32,10 @@ export class ExploreWorld {
       groundGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
       groundGeo.computeVertexNormals();
     }
+    const groundTex = SC.tiledTexture(SC.terrainTexture(), 16, 45);
     const ground = new THREE.Mesh(
       groundGeo,
-      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 })
+      new THREE.MeshStandardMaterial({ vertexColors: true, map: groundTex, roughness: 0.95 })
     );
     ground.rotation.x = -Math.PI / 2;
     ground.position.set(GROUND_OFFSET_X, 0, 0);
@@ -50,7 +51,7 @@ export class ExploreWorld {
     // Margem oposta
     const farBank = new THREE.Mesh(
       new THREE.PlaneGeometry(40, 180),
-      new THREE.MeshStandardMaterial({ color: 0x6e8a3a, roughness: 0.95 })
+      SC.texMat(0x6e8a3a, groundTex, { roughness: 0.95 })
     );
     farBank.rotation.x = -Math.PI / 2;
     farBank.position.set(95, 0.1, 0);
@@ -92,7 +93,7 @@ export class ExploreWorld {
     for (let i = 0; i < 10; i++) {
       const r = new THREE.Mesh(
         new THREE.DodecahedronGeometry(rand(0.5, 1.6), 0),
-        new THREE.MeshStandardMaterial({ color: 0x9a8a78, roughness: 0.95 })
+        SC.texMat(0x9a8a78, SC.stoneTexture(), { roughness: 0.95, flatShading: true })
       );
       r.position.set(rand(-40, 6), 0.3, rand(-70, 70));
       this.group.add(r);
@@ -128,7 +129,7 @@ export class ExploreWorld {
     // Balde e pedra ao lado do pescador
     const rock = new THREE.Mesh(
       new THREE.IcosahedronGeometry(1, 1),
-      new THREE.MeshStandardMaterial({ color: 0x9a8a78, roughness: 0.95, flatShading: true })
+      SC.texMat(0x9a8a78, SC.stoneTexture(), { roughness: 0.95, flatShading: true })
     );
     rock.scale.set(1.2, 0.7, 1.2);
     rock.position.set(3, 0.3, -12.5);

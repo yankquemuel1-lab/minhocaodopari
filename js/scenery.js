@@ -2,13 +2,150 @@
 // Mesas estratificadas da Chapada, água com brilho, vegetação arredondada,
 // itens com glow (prêmios) e anel vermelho (perigos)
 import * as THREE from 'three';
-import { rand, randInt, choice } from './util.js';
+import { rand, randInt, choice, noise2D } from './util.js';
 
 const MAT = {};
 export function mat(color, opts = {}) {
   const key = color + JSON.stringify(opts);
   if (!MAT[key]) MAT[key] = new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0.02, ...opts });
   return MAT[key];
+}
+
+// Material colorido + textura procedural compartilhada — cache separado do `mat()`
+// acima porque a textura (objeto THREE.Texture) não pode entrar no JSON.stringify
+// usado como chave ali (referência circular / serialização gigante).
+const TEX_MAT = {};
+export function texMat(color, texture, opts = {}) {
+  const key = color + '_' + texture.uuid + JSON.stringify(opts);
+  if (!TEX_MAT[key]) {
+    TEX_MAT[key] = new THREE.MeshStandardMaterial({ color, map: texture, roughness: 0.9, metalness: 0.02, ...opts });
+  }
+  return TEX_MAT[key];
+}
+
+// Desloca o raio de uma geometria de revolução (cilindro/cone) usando ruído 2D
+// em função do ângulo — quebra a silhueta perfeitamente circular, dando um ar
+// de rocha/tronco esculpido à mão em vez de "extrudado" geometricamente.
+function roughenRadial(geo, amp, seed) {
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const r = Math.sqrt(x * x + z * z);
+    if (r < 0.01) continue;
+    const ang = Math.atan2(z, x);
+    const n = noise2D(Math.cos(ang) * 2.4 + seed, Math.sin(ang) * 2.4 + y * 0.35 + seed);
+    const scale = 1 + (n - 0.5) * amp;
+    pos.setX(i, x * scale);
+    pos.setZ(i, z * scale);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+}
+
+// ---------------------------------------------------------------------------
+// Texturas procedurais de superfície (canvas + ruído) — dão detalhe fino
+// (poros, veios, grão) que a geometria low-poly sozinha não consegue.
+// Tons neutros/médios: multiplicam sobre a cor do material sem escurecer demais.
+// ---------------------------------------------------------------------------
+function noiseCanvas(size, fn) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  for (let py = 0; py < size; py++) {
+    for (let px = 0; px < size; px++) {
+      const v = Math.max(0, Math.min(1, fn(px, py)));
+      const idx = (py * size + px) * 4;
+      const g = Math.floor(v * 255);
+      img.data[idx] = g; img.data[idx + 1] = g; img.data[idx + 2] = g; img.data[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+let _rockTex = null;
+export function rockTexture() {
+  if (_rockTex) return _rockTex;
+  _rockTex = noiseCanvas(256, (px, py) => {
+    const erosion = noise2D(px * 0.045, py * 0.16);
+    const fine = noise2D(px * 0.14, py * 0.14) * 0.5;
+    const streak = noise2D(px * 0.02, py * 0.6) * 0.22;
+    return 0.6 + erosion * 0.3 + fine * 0.16 - streak * 0.18;
+  });
+  _rockTex.repeat.set(1.5, 1.5);
+  return _rockTex;
+}
+
+let _stoneTex = null;
+export function stoneTexture() {
+  if (_stoneTex) return _stoneTex;
+  _stoneTex = noiseCanvas(128, (px, py) => {
+    const a = noise2D(px * 0.1, py * 0.1);
+    const b = noise2D(px * 0.3, py * 0.3) * 0.4;
+    return 0.55 + a * 0.35 + b * 0.15;
+  });
+  return _stoneTex;
+}
+
+let _barkTex = null;
+export function barkTexture() {
+  if (_barkTex) return _barkTex;
+  _barkTex = noiseCanvas(128, (px, py) => {
+    const grain = noise2D(px * 0.05, py * 0.5) * 0.35;
+    const fine = noise2D(px * 0.4, py * 0.4) * 0.2;
+    const ring = Math.sin(py * 0.25 + noise2D(px * 0.08, 0) * 6) * 0.08;
+    return 0.55 + grain + fine - ring;
+  });
+  _barkTex.repeat.set(1, 3);
+  return _barkTex;
+}
+
+let _foliageTex = null;
+export function foliageTexture() {
+  if (_foliageTex) return _foliageTex;
+  _foliageTex = noiseCanvas(128, (px, py) => {
+    const clump = noise2D(px * 0.09, py * 0.09);
+    const leaf = noise2D(px * 0.35, py * 0.35) * 0.45;
+    return 0.55 + clump * 0.32 + leaf * 0.18;
+  });
+  return _foliageTex;
+}
+
+// Clona uma textura-base com um repeat próprio — necessário porque `.repeat` é
+// uma propriedade da instância de Texture: reaproveitar o mesmo objeto entre
+// planos de tamanhos bem diferentes faria o ladrilhamento de um "vazar" pro outro.
+export function tiledTexture(base, rx, ry) {
+  const t = base.clone();
+  t.needsUpdate = true;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(rx, ry);
+  return t;
+}
+
+let _terrainTex = null;
+export function terrainTexture() {
+  if (_terrainTex) return _terrainTex;
+  _terrainTex = noiseCanvas(256, (px, py) => {
+    const patch = noise2D(px * 0.05, py * 0.05);
+    const blade = noise2D(px * 0.3, py * 0.3) * 0.4;
+    const speck = noise2D(px * 0.9, py * 0.9) * 0.15;
+    return 0.58 + patch * 0.3 + blade * 0.18 - speck * 0.1;
+  });
+  return _terrainTex;
+}
+
+let _waterBumpTex = null;
+export function waterBumpTexture() {
+  if (_waterBumpTex) return _waterBumpTex;
+  _waterBumpTex = noiseCanvas(128, (px, py) => {
+    const big = noise2D(px * 0.06, py * 0.06);
+    const small = noise2D(px * 0.22, py * 0.22) * 0.5;
+    return 0.5 + (big - 0.5) * 0.7 + (small - 0.5) * 0.5;
+  });
+  return _waterBumpTex;
 }
 
 const GEO = {
@@ -127,13 +264,17 @@ export function makeSky() {
 // ---------------------------------------------------------------------------
 export function makeWater(width, length, uniforms) {
   const geo = new THREE.PlaneGeometry(width, length, 40, 80);
+  const bump = waterBumpTexture();
+  bump.repeat.set(width / 5, length / 5);
   const m = new THREE.MeshStandardMaterial({
     color: 0x27b8a8,
     transparent: true,
     opacity: 0.92,
     roughness: 0.12,
     metalness: 0.45,
-    depthWrite: false
+    depthWrite: false,
+    bumpMap: bump,
+    bumpScale: 0.18
   });
   m.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = uniforms.uTime;
@@ -173,6 +314,7 @@ const STRATA = ['#7a3212', '#9a4318', '#b5541f', '#c96a2e', '#d98a4a', '#e8b378'
 export function makeMesa(radius, height) {
   const g = new THREE.Group();
   const nSlabs = randInt(4, 6);
+  const seed = rand(0, 100);
   let y = 0;
   const rBase = radius;
   for (let i = 0; i < nSlabs; i++) {
@@ -181,31 +323,35 @@ export function makeMesa(radius, height) {
     const rTop = rBase * (1 - t * 0.16) * rand(0.94, 1.02);
     const rBot = rBase * (1 - Math.max(0, t - 1 / nSlabs) * 0.16) * rand(0.98, 1.06);
     const col = STRATA[Math.min(STRATA.length - 1, Math.floor(t * STRATA.length) )];
+    const geo = new THREE.CylinderGeometry(rTop, rBot, h, 12, 2);
+    roughenRadial(geo, 0.16, seed + i * 3.7);
     const slab = new THREE.Mesh(
-      new THREE.CylinderGeometry(rTop, rBot, h, 10, 1),
-      mat(new THREE.Color(col).getHex(), { flatShading: true })
+      geo,
+      texMat(new THREE.Color(col).getHex(), rockTexture(), { flatShading: true, roughness: 1 })
     );
     slab.position.y = y + h / 2;
     slab.rotation.y = rand(0, 0.6);
+    slab.castShadow = true;
+    slab.receiveShadow = true;
     g.add(slab);
     y += h * 0.96;
   }
   // Topo verde (vegetação do platô)
   const cap = new THREE.Mesh(
-    new THREE.CylinderGeometry(rBase * 0.8, rBase * 0.86, height * 0.06, 10),
+    new THREE.CylinderGeometry(rBase * 0.8, rBase * 0.86, height * 0.06, 12),
     mat(0x5d7a4a, { flatShading: true })
   );
   cap.position.y = y + height * 0.02;
   g.add(cap);
   for (let i = 0; i < 3; i++) {
-    const bush = new THREE.Mesh(GEO.blob, mat(choice([0x4a6741, 0x6e8a3a]), { flatShading: true }));
+    const bush = new THREE.Mesh(GEO.blob, texMat(choice([0x4a6741, 0x6e8a3a]), foliageTexture(), { flatShading: true }));
     bush.scale.setScalar(rand(1, 2.2));
     bush.position.set(rand(-radius * 0.5, radius * 0.5), y + 1, rand(-radius * 0.5, radius * 0.5));
     g.add(bush);
   }
   // Tálus (pedras caídas na base)
   for (let i = 0; i < 3; i++) {
-    const rock = new THREE.Mesh(GEO.rock, mat(choice([0x9a4318, 0xb5541f]), { flatShading: true }));
+    const rock = new THREE.Mesh(GEO.rock, texMat(choice([0x9a4318, 0xb5541f]), stoneTexture(), { flatShading: true }));
     rock.scale.setScalar(rand(0.8, 2));
     rock.position.set(rand(-radius, radius), rand(0.2, 0.8), radius * rand(0.7, 1.1));
     g.add(rock);
@@ -266,30 +412,57 @@ export function makeWaterfall(width, height, uniforms) {
 // ---------------------------------------------------------------------------
 function foliage(colors, scale) {
   const g = new THREE.Group();
-  const layers = randInt(2, 3);
+  const layers = randInt(3, 4);
   for (let i = 0; i < layers; i++) {
-    const b = new THREE.Mesh(GEO.blob, mat(colors[i % colors.length], { flatShading: true }));
-    const s = scale * (1 - i * 0.25);
-    b.scale.set(s, s * 0.75, s);
-    b.position.set(rand(-0.5, 0.5) * scale * 0.4, i * scale * 0.42, rand(-0.5, 0.5) * scale * 0.4);
+    const b = new THREE.Mesh(GEO.blob, texMat(colors[i % colors.length], foliageTexture(), { flatShading: true }));
+    const s = scale * (1 - i * 0.2) * rand(0.85, 1.05);
+    b.scale.set(s, s * 0.78, s);
+    b.position.set(rand(-0.6, 0.6) * scale * 0.45, i * scale * 0.36, rand(-0.6, 0.6) * scale * 0.45);
+    b.rotation.y = rand(0, Math.PI * 2);
+    b.castShadow = true;
     g.add(b);
   }
   return g;
 }
 
+// Ponto no topo de um cilindro centrado em `pos`, com metade da altura `half`
+// e rotação `th` em torno de Z — a rotação do THREE.Mesh gira em torno do
+// próprio centro da geometria, não da base, então o topo real não é
+// simplesmente "pos + altura" quando há inclinação.
+function tiltedTop(pos, half, th) {
+  return { x: pos.x - half * Math.sin(th), y: pos.y + half * Math.cos(th) };
+}
+
 function curvedTrunk(height, lean, color) {
   const g = new THREE.Group();
-  const seg1 = new THREE.Mesh(GEO.cyl, mat(color, { flatShading: true }));
-  seg1.scale.set(0.28, height * 0.55, 0.28);
-  seg1.position.y = height * 0.27;
-  seg1.rotation.z = lean * 0.4;
+  const bark = texMat(color, barkTexture(), { flatShading: true });
+
+  const h1 = height * 0.55, half1 = h1 / 2, th1 = lean * 0.4;
+  const pos1 = { x: 0, y: height * 0.27 };
+  const seg1 = new THREE.Mesh(GEO.cyl, bark);
+  seg1.scale.set(0.28, h1, 0.28);
+  seg1.position.set(pos1.x, pos1.y, 0);
+  seg1.rotation.z = th1;
+  seg1.castShadow = true;
   g.add(seg1);
-  const seg2 = new THREE.Mesh(GEO.cyl, mat(color, { flatShading: true }));
-  seg2.scale.set(0.22, height * 0.55, 0.22);
-  seg2.position.set(lean * height * 0.35, height * 0.72, 0);
-  seg2.rotation.z = lean * 0.8;
+
+  // Segmento 2 encaixado exatamente no topo real do segmento 1 (mesmo cálculo
+  // de rotação-em-torno-do-centro aplicado de trás pra frente) — antes disso,
+  // os dois pedaços do tronco ficavam com um vão visível entre eles em
+  // inclinações maiores (bem visível na palmeira, que tem o maior lean),
+  // o que a cor sólida escondia mas a textura de casca deixou aparente.
+  const h2 = height * 0.55, half2 = h2 / 2, th2 = lean * 0.8;
+  const top1 = tiltedTop(pos1, half1, th1);
+  const pos2 = { x: top1.x - half2 * Math.sin(th2), y: top1.y + half2 * Math.cos(th2) };
+  const seg2 = new THREE.Mesh(GEO.cyl, bark);
+  seg2.scale.set(0.22, h2, 0.22);
+  seg2.position.set(pos2.x, pos2.y, 0);
+  seg2.rotation.z = th2;
+  seg2.castShadow = true;
   g.add(seg2);
-  return { group: g, topX: lean * height * 0.55, topY: height };
+
+  const top2 = tiltedTop(pos2, half2, th2);
+  return { group: g, topX: top2.x, topY: top2.y };
 }
 
 export function makeTree(type) {
@@ -299,11 +472,12 @@ export function makeTree(type) {
     const t = curvedTrunk(6, lean, 0x8a6a45);
     g.add(t.group);
     for (let i = 0; i < 8; i++) {
-      const leaf = new THREE.Mesh(GEO.cone, mat(i % 2 ? 0x4f9a52 : 0x62b060, { flatShading: true, side: THREE.DoubleSide }));
+      const leaf = new THREE.Mesh(GEO.cone, texMat(i % 2 ? 0x4f9a52 : 0x62b060, foliageTexture(), { flatShading: true, side: THREE.DoubleSide }));
       leaf.scale.set(0.85, 2.9, 0.34);
       const a = (i / 8) * Math.PI * 2;
       leaf.position.set(t.topX + Math.cos(a) * 1.4, t.topY + 0.15, Math.sin(a) * 1.4);
       leaf.rotation.set(Math.sin(a) * 1.45, 0, Math.cos(a) * -1.45);
+      leaf.castShadow = true;
       g.add(leaf);
     }
     for (let i = 0; i < 3; i++) {
@@ -549,19 +723,19 @@ export function makeObstacle(kind) {
   const g = new THREE.Group();
   if (kind === 'pedra') {
     for (let i = 0; i < 3; i++) {
-      const r = new THREE.Mesh(GEO.rock, mat(0x78828a, { flatShading: true }));
+      const r = new THREE.Mesh(GEO.rock, texMat(0x78828a, stoneTexture(), { flatShading: true }));
       r.scale.setScalar(rand(0.9, 1.7));
       r.rotation.set(rand(0, 3), rand(0, 3), 0);
       r.position.set(rand(-0.9, 0.9), rand(0.2, 0.7), rand(-0.7, 0.7));
       g.add(r);
     }
-    const moss = new THREE.Mesh(GEO.blob, mat(0x5d7a4a, { flatShading: true }));
+    const moss = new THREE.Mesh(GEO.blob, texMat(0x5d7a4a, foliageTexture(), { flatShading: true }));
     moss.scale.set(0.8, 0.3, 0.8);
     moss.position.y = 1.5;
     g.add(moss);
   } else if (kind === 'raiz') {
     // Tronco flutuante bem legível: madeira com anéis de casca e galhos
-    const wood = mat(0x6e4a2e, { flatShading: true });
+    const wood = texMat(0x6e4a2e, barkTexture(), { flatShading: true });
     const log = new THREE.Mesh(new THREE.CapsuleGeometry(0.7, 4.2, 4, 10), wood);
     log.rotation.z = Math.PI / 2;
     log.rotation.y = rand(-0.4, 0.4);
@@ -582,7 +756,7 @@ export function makeObstacle(kind) {
       g.add(stub);
     }
   } else if (kind === 'lixo') {
-    const bagMat = mat(0x22262e, { roughness: 0.35 });
+    const bagMat = texMat(0x22262e, stoneTexture(), { roughness: 0.35 });
     const bag = new THREE.Mesh(GEO.blob, bagMat);
     bag.scale.set(1.0, 0.95, 1.0);
     bag.position.y = 0.75;
@@ -598,6 +772,64 @@ export function makeObstacle(kind) {
       can.position.set(dx, 0.2, dz);
       can.rotation.z = rand(-1.5, 1.5);
       g.add(can);
+    }
+  } else if (kind === 'jacare') {
+    // Jacaré espreitando: quase todo submerso, só o dorso/focinho/olhos de fora
+    const skin = texMat(0x3c4a2e, stoneTexture(), { flatShading: true, roughness: 0.65 });
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.5, 2.3, 4, 10), skin);
+    body.rotation.z = Math.PI / 2;
+    body.position.y = -0.15;
+    g.add(body);
+    const snout = new THREE.Mesh(GEO.cone, skin);
+    snout.scale.set(0.26, 0.85, 0.26);
+    snout.rotation.z = Math.PI / 2;
+    snout.position.set(1.5, -0.08, 0);
+    g.add(snout);
+    // Fileira de escamas dorsais — silhueta reconhecível mesmo de longe
+    for (let i = -2; i <= 2; i++) {
+      const spike = new THREE.Mesh(GEO.cone, mat(0x2e3a20, { flatShading: true }));
+      spike.scale.set(0.13, 0.24, 0.13);
+      spike.position.set(i * 0.48, 0.34, 0);
+      g.add(spike);
+    }
+    // Olhos amarelos frios espreitando na superfície
+    for (const sx of [-1, 1]) {
+      const eye = new THREE.Mesh(GEO.sphere, mat(0xd8c23a, { emissive: 0x8a6a10, emissiveIntensity: 0.55, roughness: 0.3 }));
+      eye.scale.setScalar(0.12);
+      eye.position.set(1.0, 0.2, sx * 0.24);
+      g.add(eye);
+      const pupil = new THREE.Mesh(GEO.sphere, mat(0x1a1408));
+      pupil.scale.setScalar(0.05);
+      pupil.position.set(1.06, 0.22, sx * 0.26);
+      g.add(pupil);
+    }
+    const tail = new THREE.Mesh(GEO.cone, skin);
+    tail.scale.set(0.32, 1.1, 0.32);
+    tail.rotation.z = -Math.PI / 2;
+    tail.position.set(-1.65, -0.1, 0);
+    g.add(tail);
+  } else if (kind === 'piranha') {
+    // Cardume de piranhas — vermelho vivo, nadando rente à superfície
+    const finBody = mat(0xc4342a, { flatShading: true, emissive: 0x5a0f0a, emissiveIntensity: 0.25 });
+    const belly = mat(0xe8dca0, { flatShading: true });
+    const school = [[0, 0, 0, 1], [0.65, 0.05, 0.5, 0.8], [-0.55, -0.03, 0.55, 0.78],
+      [0.35, 0.08, -0.6, 0.7], [-0.6, 0, -0.35, 0.68]];
+    for (const [px, py, pz, sc] of school) {
+      const fish = new THREE.Group();
+      const body = new THREE.Mesh(GEO.blob, finBody);
+      body.scale.set(0.4 * sc, 0.24 * sc, 0.6 * sc);
+      fish.add(body);
+      const bellyM = new THREE.Mesh(GEO.blob, belly);
+      bellyM.scale.set(0.28 * sc, 0.13 * sc, 0.48 * sc);
+      bellyM.position.y = -0.08 * sc;
+      fish.add(bellyM);
+      const fin = new THREE.Mesh(GEO.cone, finBody);
+      fin.scale.set(0.03 * sc, 0.26 * sc, 0.18 * sc);
+      fin.position.set(0, 0.2 * sc, -0.05 * sc);
+      fish.add(fin);
+      fish.position.set(px, py, pz);
+      fish.rotation.y = rand(-0.5, 0.5);
+      g.add(fish);
     }
   } else {
     // Garrafa PET grande, deitada, com rótulo

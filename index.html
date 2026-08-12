@@ -10,7 +10,8 @@
   <script type="importmap">
     {
       "imports": {
-        "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
       }
     }
   </script>
@@ -31,8 +32,8 @@
         <p class="pick-label">Escolha seu personagem</p>
         <div class="char-row">
           <button class="char-card" data-char="boy">
-            <img src="assets/img/player_boy_stand.png" alt="Caetano">
-            <strong>Caetano</strong>
+            <img src="assets/img/player_boy_stand.png" alt="Ben">
+            <strong>Ben</strong>
           </button>
           <button class="char-card" data-char="girl">
             <img src="assets/img/player_girl_stand.png" alt="Dandara">
@@ -40,7 +41,7 @@
           </button>
         </div>
         <p class="controls-hint">
-          WASD / Setas — andar &nbsp;•&nbsp; E — conversar &nbsp;•&nbsp; No rio: A/D ou ←/→ para desviar
+          WASD / Setas — andar &nbsp;•&nbsp; E — conversar &nbsp;•&nbsp; No rio: A/D ou ←/→ para desviar &nbsp;•&nbsp; Esc — pausar
         </p>
         <p id="menu-record" class="record"></p>
       </div>
@@ -55,6 +56,22 @@
 
     <!-- Aviso de interação -->
     <div id="interact-hint" class="hidden">Aperte <b>E</b> para falar com Seu Maneca</div>
+
+    <!-- Botão de pausa (visível durante exploração e corrida) -->
+    <button id="btn-pause" class="hidden" title="Pausar (Esc)">⏸</button>
+
+    <!-- Tela de pausa -->
+    <div id="screen-pause" class="screen hidden">
+      <div class="menu-inner">
+        <h1>PAUSADO</h1>
+        <p class="subtitle">O rio espera por você.</p>
+        <div class="char-row">
+          <button id="btn-resume" class="btn-big">▶ Continuar</button>
+          <button id="btn-pause-menu" class="btn-small">Voltar ao menu</button>
+        </div>
+        <p class="controls-hint">Voltar ao menu não registra a pontuação desta corrida.</p>
+      </div>
+    </div>
 
     <!-- Legenda de cutscene -->
     <div id="cutscene-caption" class="hidden"></div>

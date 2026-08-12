@@ -1,5 +1,6 @@
 // Personagens 3D procedurais: humanoides articulados e o Minhocão
 import * as THREE from 'three';
+import { noise2D } from './util.js';
 
 const MAT = {};
 function mat(color, opts = {}) {
@@ -8,6 +9,57 @@ function mat(color, opts = {}) {
     MAT[key] = new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0.05, ...opts });
   }
   return MAT[key];
+}
+
+// Material com textura procedural (pele/tecido) — cache separado do `mat()` porque
+// o objeto de textura não pode virar chave via JSON.stringify.
+function texMat(color, texture, opts = {}) {
+  const key = 'T' + color + '_' + texture.uuid + JSON.stringify(opts);
+  if (!MAT[key]) {
+    MAT[key] = new THREE.MeshStandardMaterial({ color, map: texture, roughness: 0.85, metalness: 0.05, ...opts });
+  }
+  return MAT[key];
+}
+
+function noiseCanvas(size, fn) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  for (let py = 0; py < size; py++) {
+    for (let px = 0; px < size; px++) {
+      const v = Math.max(0, Math.min(1, fn(px, py)));
+      const idx = (py * size + px) * 4;
+      const g = Math.floor(v * 255);
+      img.data[idx] = g; img.data[idx + 1] = g; img.data[idx + 2] = g; img.data[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return new THREE.CanvasTexture(c);
+}
+
+// Pele com leve variação de tom (poros/sombreado sutil) — evita o efeito "plástico".
+let _skinTex = null;
+function skinTexture() {
+  if (_skinTex) return _skinTex;
+  _skinTex = noiseCanvas(64, (px, py) => {
+    const blotch = noise2D(px * 0.08, py * 0.08);
+    const fine = noise2D(px * 0.3, py * 0.3) * 0.3;
+    return 0.75 + blotch * 0.2 + fine * 0.1;
+  });
+  return _skinTex;
+}
+
+// Tecido com trama sutil (roupas) — quebra a cor chapada das camisas/shorts.
+let _fabricTex = null;
+function fabricTexture() {
+  if (_fabricTex) return _fabricTex;
+  _fabricTex = noiseCanvas(64, (px, py) => {
+    const weave = (Math.sin(px * 1.1) * 0.5 + Math.sin(py * 1.1) * 0.5) * 0.06;
+    const fold = noise2D(px * 0.12, py * 0.12) * 0.25;
+    return 0.78 + weave + fold;
+  });
+  return _fabricTex;
 }
 
 function box(w, h, d, color, opts) {
@@ -22,12 +74,18 @@ function sphere(r, color, opts) {
   return m;
 }
 
+function sphereSkin(r, color, opts) {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(r, 18, 14), texMat(color, skinTexture(), opts));
+  m.castShadow = true;
+  return m;
+}
+
 // ---------------------------------------------------------------------------
 // Humanoide articulado (jogador e NPC)
 // ---------------------------------------------------------------------------
 export function makeHumanoid(style) {
   const cfg = {
-    boy:    { skin: 0x8a5a3b, shirt: 0xe8842a, shorts: 0x3b6ea5, shoes: 0x4a3524, hair: 0x2a1c12, height: 1.0 },
+    boy:    { skin: 0xe0b58c, shirt: 0xd9822e, shorts: 0x33404f, shoes: 0x262626, hair: 0x241a14, height: 1.0 },
     girl:   { skin: 0x9a6a45, shirt: 0xf2cf3a, shorts: 0x3b6ea5, shoes: 0xc0392b, hair: 0x241811, height: 0.98 },
     maneca: { skin: 0x8a5a3b, shirt: 0xcfe3ee, shorts: 0x8a7455, shoes: 0x6b4a2c, hair: 0xd8d8d8, height: 1.02 }
   }[style];
@@ -36,21 +94,21 @@ export function makeHumanoid(style) {
   const s = cfg.height;
 
   // Tronco arredondado (cápsula)
-  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.21 * s, 0.3 * s, 4, 12), mat(cfg.shirt));
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.21 * s, 0.3 * s, 4, 12), texMat(cfg.shirt, fabricTexture()));
   torso.scale.x = 1.18;
   torso.position.y = 1.1 * s;
   torso.castShadow = true;
   g.add(torso);
 
   if (style === 'maneca') {
-    const vest = new THREE.Mesh(new THREE.CapsuleGeometry(0.23 * s, 0.24 * s, 4, 12), mat(0x4a6741));
+    const vest = new THREE.Mesh(new THREE.CapsuleGeometry(0.23 * s, 0.24 * s, 4, 12), texMat(0x4a6741, fabricTexture()));
     vest.scale.set(1.16, 1, 0.9);
     vest.position.y = 1.12 * s;
     g.add(vest);
   }
 
   // Quadril / bermuda
-  const hip = new THREE.Mesh(new THREE.CapsuleGeometry(0.2 * s, 0.1 * s, 4, 12), mat(cfg.shorts));
+  const hip = new THREE.Mesh(new THREE.CapsuleGeometry(0.2 * s, 0.1 * s, 4, 12), texMat(cfg.shorts, fabricTexture()));
   hip.scale.x = 1.1;
   hip.position.y = 0.82 * s;
   g.add(hip);
@@ -58,7 +116,7 @@ export function makeHumanoid(style) {
   // Cabeça
   const headG = new THREE.Group();
   headG.position.y = 1.54 * s;
-  const head = sphere(0.2 * s, cfg.skin);
+  const head = sphereSkin(0.2 * s, cfg.skin);
   head.scale.y = 1.08;
   headG.add(head);
 
@@ -83,10 +141,33 @@ export function makeHumanoid(style) {
 
   // Cabelo / chapéu
   if (style === 'boy') {
-    const hair = sphere(0.19 * s, cfg.hair);
-    hair.scale.set(1.05, 0.75, 1.05);
-    hair.position.y = 0.1 * s;
-    headG.add(hair);
+    // Cabelo cacheado e volumoso (referência: foto do Ben). Núcleo SÓLIDO e
+    // grande cobrindo topo/laterais/nuca por inteiro primeiro — evita mostrar
+    // a cabeça "careca" vista de trás — com cachos por cima só pra silhueta
+    // bagunçada. Tudo em z<=0 (nunca na frente do rosto): testa/olhos livres.
+    const hairCore = sphere(0.2 * s, cfg.hair);
+    hairCore.scale.set(1.18, 1.05, 0.95);
+    hairCore.position.set(0, 0, -0.07 * s);
+    headG.add(hairCore);
+    const CURLS = [
+      // topo e nuca alta
+      [0.00, 0.27, -0.03, 1.00], [0.15, 0.24, -0.04, 0.85], [-0.15, 0.24, -0.04, 0.85],
+      [0.00, 0.20, -0.20, 0.85],
+      // laterais, cobrindo as orelhas
+      [0.24, 0.10, -0.06, 0.92], [-0.24, 0.10, -0.06, 0.92],
+      [0.25, -0.04, -0.10, 0.88], [-0.25, -0.04, -0.10, 0.88],
+      // mechas caindo nas laterais, quase no queixo/pescoço
+      [0.20, -0.18, -0.12, 0.80], [-0.20, -0.18, -0.12, 0.80],
+      [0.10, -0.24, -0.16, 0.72], [-0.10, -0.24, -0.16, 0.72],
+      // nuca — fecha o centro das costas da cabeça (aqui que "carecava")
+      [0.00, 0.05, -0.26, 0.92], [0.11, -0.10, -0.25, 0.80], [-0.11, -0.10, -0.25, 0.80],
+      [0.00, -0.16, -0.24, 0.78]
+    ];
+    for (const [cx, cy, cz, cr] of CURLS) {
+      const curl = sphere(0.1 * cr * s, cfg.hair);
+      curl.position.set(cx * s, cy * s, cz * s);
+      headG.add(curl);
+    }
   } else if (style === 'girl') {
     const hair = sphere(0.195 * s, cfg.hair);
     hair.scale.set(1.05, 0.85, 1.05);
@@ -116,15 +197,18 @@ export function makeHumanoid(style) {
   g.add(headG);
 
   // Membros com pivô — cápsulas arredondadas
-  function limb(w, len, color, x, y, handColor) {
+  function limb(w, len, color, x, y, handColor, isSkin) {
     const pivot = new THREE.Group();
     pivot.position.set(x, y, 0);
-    const m = new THREE.Mesh(new THREE.CapsuleGeometry(w / 2, len - w, 4, 10), mat(color));
+    const m = new THREE.Mesh(
+      new THREE.CapsuleGeometry(w / 2, len - w, 4, 10),
+      texMat(color, isSkin ? skinTexture() : fabricTexture())
+    );
     m.position.y = -len / 2;
     m.castShadow = true;
     pivot.add(m);
     if (handColor) {
-      const hand = sphere(w * 0.55, handColor);
+      const hand = sphereSkin(w * 0.55, handColor);
       hand.position.y = -len + w * 0.2;
       pivot.add(hand);
     }
@@ -133,14 +217,14 @@ export function makeHumanoid(style) {
   }
 
   const sleeve = style === 'maneca' ? 0xcfe3ee : cfg.skin;
-  const legL = limb(0.14 * s, 0.72 * s, cfg.skin, -0.12 * s, 0.72 * s);
-  const legR = limb(0.14 * s, 0.72 * s, cfg.skin, 0.12 * s, 0.72 * s);
-  const armL = limb(0.11 * s, 0.56 * s, sleeve, -0.28 * s, 1.32 * s, cfg.skin);
-  const armR = limb(0.11 * s, 0.56 * s, sleeve, 0.28 * s, 1.32 * s, cfg.skin);
+  const legL = limb(0.14 * s, 0.72 * s, cfg.skin, -0.12 * s, 0.72 * s, null, true);
+  const legR = limb(0.14 * s, 0.72 * s, cfg.skin, 0.12 * s, 0.72 * s, null, true);
+  const armL = limb(0.11 * s, 0.56 * s, sleeve, -0.28 * s, 1.32 * s, cfg.skin, sleeve === cfg.skin);
+  const armR = limb(0.11 * s, 0.56 * s, sleeve, 0.28 * s, 1.32 * s, cfg.skin, sleeve === cfg.skin);
 
   // Pés arredondados
   for (const pivot of [legL, legR]) {
-    const foot = new THREE.Mesh(new THREE.CapsuleGeometry(0.06 * s, 0.12 * s, 4, 8), mat(cfg.shoes));
+    const foot = new THREE.Mesh(new THREE.CapsuleGeometry(0.06 * s, 0.12 * s, 4, 8), mat(cfg.shoes, { roughness: 0.65 }));
     foot.rotation.x = Math.PI / 2;
     foot.position.set(0, -0.71 * s, 0.07 * s);
     pivot.add(foot);

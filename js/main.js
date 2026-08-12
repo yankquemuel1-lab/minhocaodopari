@@ -1,5 +1,9 @@
 // Minhocão do Pari 3D — orquestração: estados, input, UI e render
 import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { makeSky } from './scenery.js';
 import { ExploreWorld } from './explore.js';
 import { buildCutscene } from './cutscene.js';
@@ -39,6 +43,18 @@ class App {
     this.camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 1400);
     this.camera.position.set(-30, 5, 40);
 
+    // ----- Pós-processamento: bloom sutil no sol/água/itens brilhantes -----
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      0.45,  // strength
+      0.55,  // radius
+      0.82   // threshold — só brilha o que já é bem claro (sol, glows, emissive)
+    );
+    this.composer.addPass(this.bloomPass);
+    this.composer.addPass(new OutputPass());
+
     // ----- Luz dourada de fim de tarde -----
     const hemi = new THREE.HemisphereLight(0xffd9a0, 0x5a4630, 0.85);
     this.scene.add(hemi);
@@ -63,6 +79,7 @@ class App {
     this.waterUniforms = { uTime: { value: 0 } };
     this.dialogActive = false;
     this.cutsceneActive = false;
+    this.paused = false;
     this.charStyle = 'boy';
     this.clock = new THREE.Clock();
 
@@ -88,6 +105,8 @@ class App {
       this.camera.aspect = window.innerWidth / window.innerHeight;
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(window.innerWidth, window.innerHeight);
+      this.composer.setSize(window.innerWidth, window.innerHeight);
+      this.bloomPass.resolution.set(window.innerWidth, window.innerHeight);
     });
   }
 
@@ -110,6 +129,11 @@ class App {
     });
     $('btn-restart').addEventListener('click', () => this.restartRide());
     $('btn-menu').addEventListener('click', () => location.reload());
+
+    $('btn-pause').addEventListener('click', () => this.togglePause());
+    $('btn-resume').addEventListener('click', () => this.resumeGame());
+    // Sai sem chamar endRide()/publicarRanking() — nenhuma pontuação é registrada
+    $('btn-pause-menu').addEventListener('click', () => location.reload());
   }
 
   bindInput() {
@@ -119,14 +143,15 @@ class App {
       this.keys[key] = true;
       if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(key)) e.preventDefault();
 
-      if (key === 'e' && this.state === 'explore' && this.nearNPC && !this.dialogActive) {
+      if (key === 'e' && this.state === 'explore' && this.nearNPC && !this.dialogActive && !this.paused) {
         this.startDialog();
       }
-      if (key === ' ' && this.dialogActive) this.advanceDialog();
+      if (key === ' ' && this.dialogActive && !this.paused) this.advanceDialog();
+      if ((key === 'escape' || key === 'p') && !this.dialogActive) this.togglePause();
     });
     window.addEventListener('keyup', (e) => { this.keys[e.key.toLowerCase()] = false; });
     window.addEventListener('pointerdown', () => {
-      if (this.dialogActive) this.advanceDialog();
+      if (this.dialogActive && !this.paused) this.advanceDialog();
     });
   }
 
@@ -134,7 +159,7 @@ class App {
   startGame(char) {
     this.charStyle = char;
     this.playerName = this.playerName || 'Teste'; // fallback só pro atalho ?auto=1
-    this.nome = char === 'girl' ? 'Dandara' : 'Caetano';
+    this.nome = char === 'girl' ? 'Dandara' : 'Ben';
     $('screen-menu').classList.add('hidden');
     $('loading').classList.remove('hidden');
 
@@ -143,6 +168,7 @@ class App {
       this.scene.add(this.explore.group);
       this.state = 'explore';
       $('loading').classList.add('hidden');
+      $('btn-pause').classList.remove('hidden');
 
       // Objetivo inicial na tela
       const cap = $('cutscene-caption');
@@ -155,6 +181,7 @@ class App {
       if (p.get('cena') === 'ride') this.beginRide();
       if (p.get('cena') === 'cutscene') this.startCutscene();
       if (p.get('cena') === 'gameover') this.endRide(parseInt(p.get('pontos') || '42', 10));
+      if (p.get('testpause')) this.pauseGame();
     }, 60);
   }
 
@@ -210,6 +237,7 @@ class App {
   // ----------------------------------------------------------------
   startCutscene() {
     this.state = 'cutscene';
+    $('btn-pause').classList.add('hidden'); // sem pausa durante a cutscene roteirizada
     this.cutscene = buildCutscene(this, this.explore, () => this.beginRide());
   }
 
@@ -224,6 +252,7 @@ class App {
       this.sun.castShadow = false; // performance na corrida
 
       $('hud').classList.remove('hidden');
+      $('btn-pause').classList.remove('hidden');
       this.setScore(0);
       this.setVidas(3);
       this.setTrecho('Rio Quilombo — Chapada dos Guimarães');
@@ -239,6 +268,7 @@ class App {
     this.scene.fog.color.set(0xf7c98f);
     this.state = 'ride';
     $('hud').classList.remove('hidden');
+    $('btn-pause').classList.remove('hidden');
     this.setScore(0);
     this.setVidas(3);
     this.setTrecho('Rio Quilombo — Chapada dos Guimarães');
@@ -247,6 +277,7 @@ class App {
   endRide(score) {
     this.state = 'gameover';
     $('hud').classList.add('hidden');
+    $('btn-pause').classList.add('hidden');
     const rec = parseInt(localStorage.getItem('minhocao3d_recorde') || '0', 10);
     const isNew = score > rec;
     if (isNew) localStorage.setItem('minhocao3d_recorde', String(score));
@@ -296,6 +327,23 @@ class App {
   }
 
   // ----------------------------------------------------------------
+  togglePause() {
+    if (this.state !== 'explore' && this.state !== 'ride') return;
+    if (this.dialogActive) return; // não pausa no meio da fala do Seu Maneca
+    this.paused ? this.resumeGame() : this.pauseGame();
+  }
+
+  pauseGame() {
+    this.paused = true;
+    $('screen-pause').classList.remove('hidden');
+  }
+
+  resumeGame() {
+    this.paused = false;
+    $('screen-pause').classList.add('hidden');
+  }
+
+  // ----------------------------------------------------------------
   setScore(v) { $('hud-score').textContent = 'Pontos: ' + v; }
   setTrecho(v) { $('hud-trecho').textContent = v; }
   setVidas(v) { $('hud-vidas').textContent = '❤'.repeat(Math.max(0, v)); }
@@ -321,39 +369,45 @@ class App {
     requestAnimationFrame(this.loop);
     const dt = Math.min(this.clock.getDelta(), 0.05);
     const t = this.clock.elapsedTime;
-    this.waterUniforms.uTime.value = t;
 
-    if (this.state === 'explore') {
-      this.nearNPC = this.explore.update(dt, t);
-      $('interact-hint').classList.toggle('hidden', !this.nearNPC || this.dialogActive);
-    } else if (this.state === 'cutscene') {
-      // Atalho de debug: ?cutfreeze=6.5 congela a cutscene nesse instante
-      // (pra capturar screenshot de um momento exato em teste headless)
-      if (this.cutFreezeAt === undefined) {
-        const cf = new URLSearchParams(location.search).get('cutfreeze');
-        this.cutFreezeAt = cf === null ? -1 : parseFloat(cf);
-        this.cutT = 0;
+    // Pausado: consome o delta (evita salto de tempo ao voltar) mas não
+    // avança nada do mundo — o frame continua sendo renderizado, congelado,
+    // por trás do overlay de pausa.
+    if (!this.paused) {
+      this.waterUniforms.uTime.value = t;
+
+      if (this.state === 'explore') {
+        this.nearNPC = this.explore.update(dt, t);
+        $('interact-hint').classList.toggle('hidden', !this.nearNPC || this.dialogActive);
+      } else if (this.state === 'cutscene') {
+        // Atalho de debug: ?cutfreeze=6.5 congela a cutscene nesse instante
+        // (pra capturar screenshot de um momento exato em teste headless)
+        if (this.cutFreezeAt === undefined) {
+          const cf = new URLSearchParams(location.search).get('cutfreeze');
+          this.cutFreezeAt = cf === null ? -1 : parseFloat(cf);
+          this.cutT = 0;
+        }
+        let cdt = dt;
+        if (this.cutFreezeAt >= 0) {
+          if (this.cutT >= this.cutFreezeAt) cdt = 0;
+          this.cutT += cdt;
+        }
+        this.cutscene.update(cdt, t);
+      } else if (this.state === 'ride' || this.state === 'gameover') {
+        if (this.ride && this.state === 'ride') this.ride.update(dt, t);
       }
-      let cdt = dt;
-      if (this.cutFreezeAt >= 0) {
-        if (this.cutT >= this.cutFreezeAt) cdt = 0;
-        this.cutT += cdt;
+
+      // Céu acompanha a câmera (horizonte estável)
+      this.sky.position.copy(this.camera.position);
+
+      // Tremor de câmera
+      if (this.shake > 0.001) {
+        this.camera.position.x += (Math.random() - 0.5) * this.shake;
+        this.camera.position.y += (Math.random() - 0.5) * this.shake;
       }
-      this.cutscene.update(cdt, t);
-    } else if (this.state === 'ride' || this.state === 'gameover') {
-      if (this.ride && this.state === 'ride') this.ride.update(dt, t);
     }
 
-    // Céu acompanha a câmera (horizonte estável)
-    this.sky.position.copy(this.camera.position);
-
-    // Tremor de câmera
-    if (this.shake > 0.001) {
-      this.camera.position.x += (Math.random() - 0.5) * this.shake;
-      this.camera.position.y += (Math.random() - 0.5) * this.shake;
-    }
-
-    this.renderer.render(this.scene, this.camera);
+    this.composer.render();
   }
 }
 
