@@ -159,7 +159,7 @@ class App {
   startGame(char) {
     this.charStyle = char;
     this.playerName = this.playerName || 'Teste'; // fallback só pro atalho ?auto=1
-    this.nome = char === 'girl' ? 'Dandara' : 'Ben';
+    this.nome = char === 'girl' ? 'Jana' : 'Ben';
     $('screen-menu').classList.add('hidden');
     $('loading').classList.remove('hidden');
 
